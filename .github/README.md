@@ -1,65 +1,84 @@
-<p align="center">
-  <img height="75" src="https://github.com/user-attachments/assets/d09ccf61-003a-40e0-8d32-b57843133ad6">
-</p>
+# Web osu!mania (but in standalone bruh)
 
----
+An unofficial osu!mania-style rhythm game with a browser client, desktop and Android packaging, and an experimental .NET MAUI native app.
 
-Web osu!mania is an unofficial web port of osu!'s piano-style gamemode, osu!mania. Play beatmaps directly in your browser, without the need to download the desktop application.
+## Project status
 
-Game mechanics attempt to match (if not come close to) the official osu!mania's V2 scoring system.
+The React, TypeScript, and PixiJS game is the complete gameplay implementation. The Windows desktop build uses Electron to package that client, and the Android build uses Capacitor. Both can play beatmaps that have already been installed locally. Searching for and downloading beatmaps requires an internet connection and the Web osu!mania API.
 
-**Features**
+The `native/WebOsuMania.Native` directory is an experimental MAUI port, not a replacement for the complete game yet. Its current library and editor screens are prototypes; gameplay, `.osz` importing, and map export are not implemented there.
 
-- Search & filter beatmaps just like on the osu! site
-- Gameplay mods + custom song speed
-- Local high scores
-- Save beatmaps
-- Supports SV beatmaps and beatmap hitsounds
-- Supports keyboard, gamepad, and touch screen input
+## Features
 
-**Supported Settings**
+- osu!mania-style gameplay with keyboard, gamepad, and touch input in the React client
+- Local `.osz` beatmap import and offline play in the React client
+- Beatmap search and downloads when online
+- Local settings, collections, scores, and replays
+- A browser-based beatmap editor prototype at `/editor`
+- Electron desktop packaging for Windows and Linux
+- Capacitor Android debug APK packaging
 
-- Scroll speed
-- Bar/circle/arrow/diamond skins
-- Upscroll
-- Enable/disable 300g judgement, error bar, FPS counter
-- ...and more!
+## Requirements
 
-[Visit the site](https://webosumania.com/)
+- Node.js 20 or newer and npm
+- For Android builds: a Java JDK and Android SDK command-line/build tools, with `ANDROID_HOME` or `ANDROID_SDK_ROOT` configured
+- For the experimental MAUI project: .NET 10 SDK and the relevant MAUI workload
 
-Site blocked on your network? Try these mirrors:
+## Run the game locally
 
-- [Mirror 1](https://hectickiwi.github.io/Web-Osu-Mania)
-- [Mirror 2](https://wom.slingexe.com)
-
-## Demo
-
-https://github.com/user-attachments/assets/c449893b-ea35-41b7-88c2-63e77d7b0a44
-
-## Credits
-
-- [NeriNyan](https://nerinyan.moe/), [SayoBot](https://osu.sayobot.cn/home), [Mino](https://catboy.best/), [osu.direct](https://osu.direct/home), [Nekoha](https://mirror.nekoha.moe/), and [BeatConnect](https://beatconnect.io/) for their APIs and assets
-- Peppy and the rest of the osu! team for creating [osu!](https://osu.ppy.sh/)
-
-## Development
-
-- Add a `.env` to the project's root:
-
-```
-# Get these values by following these instructions: https://osu.ppy.sh/docs/index.html#registering-an-oauth-application
-OSU_API_CLIENT_ID=
-OSU_API_CLIENT_SECRET=
-
-# Ratelimit
-TRUST_CF_CONNECTING_IP=true # Set to false if not behind Cloudflare
+```sh
+npm ci
+npm run dev
 ```
 
-- Install NPM packages with `npm install`
-- Run with `npm run dev`
-- Open in browser at [http://localhost:3000](http://localhost:3000)
+The development server prints its local URL in the terminal. Some online API features require the configured backend; local beatmaps are stored in browser storage.
 
-## Disclaimer
+## Build desktop apps
 
-This project is not affiliated with or endorsed by osu! or its creators. All assets, including images, sounds, and any other copyrighted materials, are the property of their respective owners. The use of these assets in this project is intended for non-commercial, educational, or personal use only.
+Run the desktop app without creating an installer:
 
-By using the site, you agree to comply with the terms and conditions set forth by the original content creators.
+```sh
+npm run desktop
+```
+
+Create a Windows installer:
+
+```sh
+npm run dist:windows
+```
+
+Create a Linux x86_64 AppImage (run on Linux):
+
+```sh
+npm run dist:linux
+```
+
+Desktop build output is written to `release/`.
+
+## Build Android APK
+
+```sh
+npm run android:apk
+```
+
+The debug APK is written to `android/app/build/outputs/apk/debug/`. Android packaging requires the JDK, Android SDK, and accepted SDK licenses.
+
+## Offline use
+
+Import or install beatmaps while online, or load local `.osz` files in the React client. Installed maps and game data are kept in local browser storage for subsequent offline play. Beatmap search and new downloads need internet access. The Electron desktop shell also forwards API requests to `https://webosumania.com` by default; set `WEB_OSU_MANIA_API_URL` to use a compatible alternative backend.
+
+## Configuration
+
+See [`.env.example`](.env.example) for the server-side osu! API and rate-limit variables. Keep real credentials in a local `.env` file and never commit them. The `.env` file is ignored by Git.
+
+## Repository layout
+
+- `src/`: React application, gameplay engine, beatmap parsing, and browser editor
+- `desktop/`: Electron desktop shell
+- `android/`: Capacitor Android project
+- `native/WebOsuMania.Native/`: experimental .NET MAUI port
+- `public/`: game skins, sounds, and static assets
+
+## License and attribution
+
+The repository is published under the [Unlicense](LICENSE). This project is unofficial and is not affiliated with or endorsed by osu! or its creators. osu! and third-party assets remain the property of their respective owners; see the in-app credits and source providers for attribution.
