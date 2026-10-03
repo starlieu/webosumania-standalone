@@ -1,0 +1,246 @@
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { BeatmapData } from "@/lib/beatmapParser";
+import { idb } from "@/lib/idb";
+import { downloadReplay } from "@/lib/replay";
+import { downloadResults, getReplayFilename } from "@/lib/results";
+import { getModStrings } from "@/lib/utils";
+import type { PlayResults } from "@/types";
+import { Camera, MoveLeft, Play, Repeat, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useGameStore } from "../../stores/gameStore";
+import {
+  MAX_SCORES_PER_BEATMAP,
+  useHighScoresStore,
+} from "../../stores/highScoresStore";
+import { useSettingsStore } from "../../stores/settingsStore";
+import { Button } from "../ui/button";
+import Results from "./results";
+
+const ResultsScreen = ({
+  beatmapData,
+  playResults,
+  retry,
+}: {
+  beatmapData: BeatmapData;
+  playResults: PlayResults;
+  retry: () => void;
+}) => {
+  const closeGame = useGameStore.use.closeGame();
+  const beatmapSet = useGameStore.use.beatmapSet();
+  const beatmapId = useGameStore.use.beatmapId();
+  const setReplayData = useGameStore.use.setReplayData();
+  const uploadedBeatmapSet = useGameStore.use.uploadedBeatmapSet();
+  const mods = useSettingsStore.use.mods();
+  const setHighScores = useHighScoresStore.use.setHighScores();
+  const [highScorePosition, setHighScorePosition] = useState<number | null>(
+    null,
+  );
+  const hiddenRef = useRef<HTMLDivElement>(null);
+
+  // Check for new high score
+  useEffect(() => {
+    if (
+      !beatmapId ||
+      !beatmapSet ||
+      !!uploadedBeatmapSet ||
+      mods.autoplay ||
+      playResults.failed ||
+      playResults.viewingReplay
+    ) {
+      return;
+    }
+
+    const checkNewHighScore = async () => {
+      if (!playResults.replayData) {
+        return;
+      }
+
+      const highScores = useHighScoresStore.getState().highScores;
+      const beatmapSetId = beatmapSet.id;
+      const currentScores = highScores[beatmapSetId]?.[beatmapId] ?? [];
+
+      let position = 0;
+      while (
+        position < currentScores.length &&
+        playResults.score <= currentScores[position].results.score
+      ) {
+        position++;
+      }
+
+      if (position < MAX_SCORES_PER_BEATMAP && !highScorePosition) {
+        const replayId = `${beatmapId} ${crypto.randomUUID()}`;
+
+        await idb.saveReplay(playResults.replayData, replayId);
+
+        // Trim out properties that don't need to be saved
+        const { failed, viewingReplay, replayData, hitErrors, ...results } =
+          playResults;
+
+        setHighScores((draft) => {
+          draft[beatmapSetId] ??= {};
+          draft[beatmapSetId][beatmapId] ??= [];
+
+          draft[beatmapSetId][beatmapId].splice(position, 0, {
+            timestamp: replayData.timestamp!,
+            mods: getModStrings(mods),
+            results,
+            replayId,
+          });
+
+          if (draft[beatmapSetId][beatmapId].length > MAX_SCORES_PER_BEATMAP) {
+            const replayIdToDelete =
+              draft[beatmapSetId][beatmapId].pop()!.replayId;
+            idb.deleteReplay(replayIdToDelete);
+          }
+        });
+
+        setHighScorePosition(position + 1);
+      }
+    };
+
+    checkNewHighScore();
+  }, [
+    beatmapId,
+    beatmapSet,
+    uploadedBeatmapSet,
+    playResults,
+    setHighScores,
+    mods,
+    highScorePosition,
+  ]);
+
+  return (
+    <>
+      {/* Top of -1px since it wasn't covering the top for some reason */}
+      <div className="bg-background animate-in fade-in scrollbar fixed inset-0 -inset-y-px overflow-auto duration-1000">
+        {/* Hidden results at a fixed width for getting screenshots */}
+        <div className="max-h-0 overflow-hidden" aria-hidden tabIndex={-1}>
+          <div ref={hiddenRef} className="w-7xl">
+            <Results
+              beatmapData={beatmapData}
+              playResults={playResults}
+              highScorePosition={highScorePosition}
+            />
+          </div>
+        </div>
+
+        <Results
+          beatmapData={beatmapData}
+          playResults={playResults}
+          highScorePosition={highScorePosition}
+          responsive
+        />
+
+        {/* Footer actions */}
+        <div className="mx-auto mt-8 flex max-w-(--breakpoint-xl) flex-col justify-center p-8 pt-0">
+          <div className="flex flex-wrap items-center justify-between gap-8">
+            <div className="flex gap-4">
+              <Button
+                variant={"ghost"}
+                className="gap-2 text-xl"
+                onClick={() => closeGame()}
+              >
+                <MoveLeft /> Back
+              </Button>
+
+              {!playResults.viewingReplay && (
+                <Button
+                  variant={"default"}
+                  className="gap-2 text-xl"
+                  onClick={() => retry()}
+                >
+                  <Repeat /> Retry
+                </Button>
+              )}
+            </div>
+
+            <div className="flex gap-4">
+              <TooltipProvider>
+                <Tooltip delayDuration={0}>
+                  <TooltipTrigger asChild className="text-xl">
+                    <Button
+                      variant={"outline"}
+                      onClick={() => {
+                        if (!hiddenRef.current) {
+                          return;
+                        }
+
+                        const filename = `${getReplayFilename(beatmapData.beatmapSetId, beatmapData.metadata.title, beatmapData.version, playResults)}.png`;
+                        downloadResults(hiddenRef.current, filename);
+                      }}
+                    >
+                      <Camera />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Download Results</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              {playResults.replayData && (
+                <div className="outline-border rounded-md outline-1 outline-solid">
+                  <TooltipProvider>
+                    <Tooltip delayDuration={0}>
+                      <TooltipTrigger
+                        asChild
+                        className="rounded-r-none text-xl"
+                      >
+                        <Button
+                          variant={"ghost"}
+                          onClick={() => {
+                            setReplayData(playResults.replayData!);
+                            retry();
+                          }}
+                        >
+                          <Play />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Watch Replay</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
+                  {!mods.autoplay && (
+                    <TooltipProvider>
+                      <Tooltip delayDuration={0}>
+                        <TooltipTrigger
+                          asChild
+                          className="rounded-l-none border-l text-xl"
+                        >
+                          <Button
+                            variant={"ghost"}
+                            onClick={() =>
+                              downloadReplay(
+                                playResults.replayData!,
+                                beatmapData,
+                                playResults,
+                              )
+                            }
+                          >
+                            <Save />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Download Replay</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default ResultsScreen;

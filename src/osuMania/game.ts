@@ -1,0 +1,1252 @@
+import type { TimelineDataPoint } from "@/components/game/timelineGraph";
+import { CUSTOM_SOUND_OPTION } from "@/components/settings/sounds/customSoundSelect";
+import type {
+  BeatmapData,
+  Break,
+  Difficulty,
+  HitObject,
+  HitWindows,
+  TimingPoint,
+} from "@/lib/beatmapParser";
+import { idb } from "@/lib/idb";
+import { decodeMods } from "@/lib/replay";
+import {
+  BASE_PATH,
+  createObjectURLWithExtension,
+  patchLaneColors,
+  scaleWidth,
+} from "@/lib/utils";
+import type { ColumnColor, Settings } from "@/stores/settingsStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import type { Column, GameState, PlayResults } from "@/types";
+import { gsap } from "gsap";
+import { PixiPlugin } from "gsap/PixiPlugin";
+import { Howl } from "howler";
+import type { Ticker } from "pixi.js";
+import * as PIXI from "pixi.js";
+import {
+  Application,
+  BitmapText,
+  Container,
+  FillGradient,
+  Graphics,
+  ResizePlugin,
+  TextStyle,
+  extensions,
+} from "pixi.js";
+import type { Dispatch, SetStateAction } from "react";
+import {
+  MAX_TIME_RANGE,
+  getAllLaneColors,
+  laneArrowDirections,
+  laneWidths,
+} from "./constants";
+import { Countdown } from "./sprites/countdown";
+import { ErrorBar } from "./sprites/errorBar";
+import { Fps } from "./sprites/fps";
+import { HealthBar } from "./sprites/healthBar";
+import { ArrowHold } from "./sprites/hold/arrowHold";
+import { BarHold } from "./sprites/hold/barHold";
+import { CircleHold } from "./sprites/hold/circleHold";
+import { DiamondHold } from "./sprites/hold/diamondHold";
+import { Judgement } from "./sprites/judgement";
+import { JudgementCounter } from "./sprites/judgementCounter";
+import { ArrowKey } from "./sprites/key/arrowKey";
+import { BarKey } from "./sprites/key/barKey";
+import { CircleKey } from "./sprites/key/circleKey";
+import { DiamondKey } from "./sprites/key/diamondKey";
+import type { Key } from "./sprites/key/key";
+import { KpsCounter } from "./sprites/kpsCounter";
+import { ProgressBar } from "./sprites/progressBar";
+import { ProgressPie } from "./sprites/progressPie";
+import { StageCover } from "./sprites/stageCover";
+import { StageHint } from "./sprites/stageHint";
+import { StageLight } from "./sprites/stageLight";
+import { ArrowTap } from "./sprites/tap/arrowTap";
+import { BarTap } from "./sprites/tap/barTap";
+import { CircleTap } from "./sprites/tap/circleTap";
+import { DiamondTap } from "./sprites/tap/diamondTap";
+import { Tap } from "./sprites/tap/tap";
+import { TouchHitboxes } from "./sprites/touchHitboxes";
+import { AudioSystem } from "./systems/audio";
+import { HealthSystem, MIN_HEALTH } from "./systems/health";
+import { InputSystem } from "./systems/input";
+import { ReplayPlayer } from "./systems/replayPlayer";
+import type { ReplayData } from "./systems/replayRecorder";
+import { ReplayRecorder } from "./systems/replayRecorder";
+import { ScoreSystem } from "./systems/score";
+
+PixiPlugin.registerPIXI(PIXI);
+
+export class Game {
+  public app = new Application();
+  public state: GameState = "WAIT";
+  public showHud: boolean;
+
+  public settings: Settings;
+  public mods: Settings["mods"];
+  public difficulty: Difficulty;
+  public columnKeybinds: [string | null, string | null][];
+  public hitWindows: HitWindows;
+  public laneColors: readonly ColumnColor[];
+  public laneArrowDirections: readonly number[]; // Only used for the arrow style
+  public audioOffset: number;
+
+  public hitPosition: number;
+  public hitPositionOffset: number;
+  public stagePositionOffset: number;
+  public scaledColumnWidth: number;
+  public notesContainerWidth: number;
+
+  // Systems
+  public healthSystem: HealthSystem;
+  public scoreSystem: ScoreSystem;
+  public inputSystem: InputSystem;
+  public audioSystem: AudioSystem;
+
+  // Replay Systems
+  public replayRecorder?: ReplayRecorder;
+  public replayPlayer?: ReplayPlayer;
+
+  // Classes for skin elements
+  public tapClass:
+    typeof BarTap | typeof CircleTap | typeof ArrowTap | typeof DiamondTap;
+  public holdClass:
+    typeof BarHold | typeof CircleHold | typeof ArrowHold | typeof DiamondHold;
+  public keyClass:
+    typeof BarKey | typeof CircleKey | typeof ArrowKey | typeof DiamondKey;
+
+  // Hitobjects
+  public hitObjects: HitObject[];
+  public columns: Column[] = [];
+  public currentColumnIndices: number[] = [];
+
+  // UI Components
+  public replayText?: BitmapText;
+  private startMessage: BitmapText;
+  public scoreText?: BitmapText;
+  public comboText?: BitmapText;
+  public accuracyText?: BitmapText;
+  public stageSideWidth = 2;
+  public stageContainer: Container = new Container();
+  public stageSides: Graphics;
+  public stageBackground: Container;
+  public stageLights: StageLight[] = [];
+  public stageCover: StageCover;
+  public notesContainer: Container = new Container();
+  public keysContainer: Container = new Container();
+  public keys: Key[] = [];
+  public touchHitboxes?: TouchHitboxes;
+  public stageHint: StageHint;
+  public judgement?: Judgement;
+  public judgementCounter?: JudgementCounter;
+  public kpsCounter?: KpsCounter;
+  private progress?: ProgressBar | ProgressPie;
+  public healthBar?: HealthBar;
+  public errorBar?: ErrorBar;
+  private fps?: Fps;
+  public countdown: Countdown;
+
+  public song: Howl;
+  public timeElapsed = 0;
+  private delay: number;
+
+  public videoEl: HTMLVideoElement | null;
+
+  public startTime: number;
+  public endTime: number;
+
+  public breaks: Break[];
+
+  private pauseCountdown: number;
+
+  public timingPoints: TimingPoint[];
+  public currentTimingPoint: TimingPoint;
+  private nextTimingPoint: TimingPoint;
+
+  private setResults: (failed?: boolean) => void;
+  private setIsPaused: Dispatch<SetStateAction<boolean>>;
+  private retry: () => void;
+
+  private finished = false;
+
+  // Results chart data
+  public timelineData: TimelineDataPoint[] = [];
+
+  public constructor(
+    beatmapData: BeatmapData,
+    setResults: Dispatch<SetStateAction<PlayResults | null>>,
+    setIsPaused: Dispatch<SetStateAction<boolean>>,
+    replayData: ReplayData | null,
+    retry: () => void,
+    videoEl: HTMLVideoElement | null,
+  ) {
+    gsap.registerPlugin(PixiPlugin);
+
+    this.resize = this.resize.bind(this);
+    this.hitObjects = beatmapData.hitObjects;
+    this.startTime = beatmapData.startTime;
+    this.endTime = beatmapData.endTime;
+    this.breaks = beatmapData.breaks;
+    this.hitWindows = beatmapData.hitWindows;
+    this.difficulty = beatmapData.difficulty;
+    this.audioOffset = beatmapData.audioOffset;
+
+    this.timingPoints = beatmapData.timingPoints;
+    this.currentTimingPoint = this.timingPoints[0];
+    this.nextTimingPoint = this.timingPoints[1];
+
+    this.settings = JSON.parse(JSON.stringify(useSettingsStore.getState()));
+
+    // If watching a replay, there should be no unpause delay
+    if (replayData) {
+      this.settings.unpauseDelay = 0;
+    }
+
+    this.mods = this.settings.mods; // Replays will override this
+
+    if (this.settings.skin.colors.mode === "simple") {
+      this.laneColors = getAllLaneColors(
+        this.settings.skin.colors.simple.hue,
+        this.settings.darkerHoldNotes,
+      )[this.difficulty.keyCount - 1];
+    } else {
+      this.laneColors = patchLaneColors(
+        this.settings.skin.colors.custom[this.difficulty.keyCount - 1],
+      );
+    }
+
+    this.laneArrowDirections =
+      laneArrowDirections[this.difficulty.keyCount - 1];
+
+    this.setResults = (failed?: boolean) => {
+      if (this.replayRecorder) {
+        this.replayRecorder.replayData.timestamp = Date.now();
+      }
+
+      // The data points should already be in order, but just in case
+      this.timelineData.sort((a, b) => a.time - b.time);
+
+      setResults({
+        320: this.scoreSystem[320],
+        300: this.scoreSystem[300],
+        200: this.scoreSystem[200],
+        100: this.scoreSystem[100],
+        50: this.scoreSystem[50],
+        0: this.scoreSystem[0],
+        score: this.scoreSystem.score,
+        accuracy: this.scoreSystem.accuracy,
+        maxCombo: this.scoreSystem.maxCombo,
+        failed,
+        viewingReplay: !!this.replayPlayer,
+        replayData: (this.replayRecorder?.replayData ??
+          this.replayPlayer?.replayData)!,
+        hitErrors: this.scoreSystem.hitErrors,
+        timelineData: this.timelineData,
+      });
+    };
+
+    this.setIsPaused = setIsPaused;
+    this.retry = retry;
+
+    this.hitPositionOffset = this.settings.hitPositionOffset;
+
+    if (this.settings.style === "bars") {
+      this.tapClass = BarTap;
+      this.holdClass = BarHold;
+      this.keyClass = BarKey;
+    } else if (this.settings.style === "circles") {
+      this.tapClass = CircleTap;
+      this.holdClass = CircleHold;
+      this.keyClass = CircleKey;
+    } else if (
+      this.settings.style === "arrows" ||
+      this.settings.style === "thickArrows"
+    ) {
+      this.tapClass = ArrowTap;
+      this.holdClass = ArrowHold;
+      this.keyClass = ArrowKey;
+    } else {
+      this.tapClass = DiamondTap;
+      this.holdClass = DiamondHold;
+      this.keyClass = DiamondKey;
+    }
+
+    this.columnKeybinds =
+      this.settings.keybinds.keyModes[this.difficulty.keyCount - 1];
+
+    if (replayData) {
+      this.mods = decodeMods(replayData.mods);
+
+      this.replayPlayer = new ReplayPlayer(this, replayData);
+    } else {
+      this.replayRecorder = new ReplayRecorder(this, beatmapData);
+    }
+
+    this.scoreSystem = new ScoreSystem(this, this.hitObjects.length);
+    this.inputSystem = new InputSystem(this);
+    this.audioSystem = new AudioSystem(this, beatmapData.sounds);
+    this.healthSystem = new HealthSystem(this);
+
+    this.song = beatmapData.song.howl;
+    this.song.volume(this.settings.musicVolume);
+    this.song.rate(this.mods.playbackRate);
+    this.song.on("end", () => {
+      // Seek back to the end so the progress bar stays full
+      this.song.seek(this.song.duration());
+    });
+
+    this.videoEl = videoEl;
+    if (videoEl) {
+      videoEl.playbackRate = this.mods.playbackRate;
+    }
+
+    this.delay = beatmapData.delay;
+  }
+
+  public dispose() {
+    this.inputSystem.dispose();
+    this.audioSystem.dispose();
+
+    window.removeEventListener("resize", this.resize);
+
+    gsap.killTweensOf("*");
+    gsap.globalTimeline.clear();
+
+    this.app.destroy(
+      { removeView: true },
+      {
+        children: true,
+        style: true,
+        texture: true,
+        // textureSource: true,
+      },
+    );
+
+    window.__PIXI_APP__ = null;
+  }
+
+  private resize() {
+    this.app.renderer.resize(window.innerWidth, window.innerHeight);
+
+    this.recalculateLayout();
+
+    this.startMessage.x = this.app.screen.width / 2 + this.stagePositionOffset;
+    this.startMessage.y = this.app.screen.height / 2;
+
+    this.stageHint?.resize();
+    this.stageLights.forEach((stageLight) => stageLight.resize());
+
+    this.keys.forEach((key) => key.resize());
+
+    const fillGradient = new FillGradient({
+      start: {
+        x: 0,
+        y: 1,
+      },
+      end: {
+        x: 0,
+        y: 0,
+      },
+      colorStops: [
+        {
+          offset: 0.4,
+          color: "gray",
+        },
+        {
+          offset: 1,
+          color: "transparent",
+        },
+      ],
+    });
+
+    this.stageContainer.removeChild(this.stageSides);
+    this.stageSides
+      .clear()
+      .rect(0, 0, this.stageSideWidth, this.app.screen.height)
+      .rect(
+        this.stageSideWidth + this.notesContainerWidth,
+        0,
+        this.stageSideWidth,
+        this.app.screen.height,
+      )
+      .fill(fillGradient);
+
+    this.stageContainer.addChild(this.stageSides);
+    this.stageBackground.height = this.app.screen.height;
+
+    this.stageContainer.pivot.x = this.stageContainer.width / 2;
+    this.stageContainer.pivot.y = this.app.screen.height / 2;
+
+    this.stageContainer.x =
+      this.app.screen.width / 2 + this.stagePositionOffset;
+    this.stageContainer.y = this.app.screen.height / 2;
+
+    this.stageCover?.resize();
+
+    this.touchHitboxes?.resize();
+
+    this.judgement?.resize();
+
+    this.judgementCounter?.resize();
+
+    this.kpsCounter?.resize();
+
+    if (this.comboText) {
+      this.comboText.x = this.app.screen.width / 2 + this.stagePositionOffset;
+
+      if (this.settings.upscroll) {
+        this.comboText.y =
+          this.app.screen.height * this.settings.ui.stageHudYPosition;
+      } else {
+        this.comboText.y =
+          this.app.screen.height * (1 - this.settings.ui.stageHudYPosition) +
+          50;
+      }
+    }
+
+    if (this.errorBar) {
+      this.errorBar.resize();
+    }
+
+    // Hud section
+    if (this.scoreText) {
+      this.scoreText.x = this.app.screen.width - 30;
+      this.scoreText.scale = Math.min((this.app.screen.width - 60) / 400, 1);
+    }
+    this.progress?.resize();
+    this.healthBar?.resize();
+    if (this.accuracyText) {
+      this.accuracyText.x = this.app.screen.width - 30;
+      this.accuracyText.scale = Math.min((this.app.screen.width - 60) / 400, 1);
+    }
+
+    if (this.replayText) {
+      this.replayText.x = this.app.screen.width / 2;
+
+      if (this.settings.upscroll) {
+        this.replayText.y = this.app.screen.height - 75;
+      }
+    }
+  }
+
+  public setShowHud(showHud: boolean) {
+    this.showHud = showHud;
+
+    [
+      this.scoreText,
+      this.comboText,
+      this.accuracyText,
+      this.judgementCounter,
+      this.kpsCounter,
+      this.progress,
+      this.healthBar,
+      this.errorBar,
+      this.fps,
+    ]
+      .filter((item) => !!item)
+      .map((item) => {
+        if (item instanceof Container) {
+          item.visible = showHud;
+        } else {
+          item.view.visible = showHud;
+        }
+      });
+  }
+
+  private recalculateLayout() {
+    this.stagePositionOffset =
+      (this.settings.stagePosition *
+        (this.app.screen.width - this.stageContainer.width)) /
+      2;
+
+    this.hitPosition = this.app.screen.height - this.hitPositionOffset;
+
+    this.scaledColumnWidth = scaleWidth(
+      laneWidths[this.difficulty.keyCount - 1] +
+        this.settings.laneWidthAdjustment,
+      this.app.screen.width,
+    );
+
+    // Cap column width on small screen widths
+    if (
+      this.scaledColumnWidth * this.difficulty.keyCount >
+      this.app.screen.width
+    ) {
+      this.scaledColumnWidth = this.app.screen.width / this.difficulty.keyCount;
+    }
+
+    this.notesContainerWidth = Math.min(
+      this.difficulty.keyCount * this.scaledColumnWidth +
+        this.settings.laneSpacing * (this.difficulty.keyCount - 1),
+      this.app.screen.width,
+    );
+  }
+
+  async main(ref: HTMLDivElement, showHud: boolean) {
+    extensions.remove(ResizePlugin);
+
+    const initialBackgroundAlpha = this.settings.lightenBackgroundDuringBreaks
+      ? this.settings.backgroundDim * 0.5
+      : this.settings.backgroundDim;
+
+    await this.app.init({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundAlpha: initialBackgroundAlpha,
+      backgroundColor: "black",
+      antialias: !this.settings.performanceMode,
+      autoDensity: true,
+      resolution: window.devicePixelRatio,
+      eventMode: "none",
+      eventFeatures: {
+        move: this.settings.touch.enabled,
+        globalMove: false,
+        click: this.settings.touch.enabled,
+        wheel: false,
+      },
+    });
+
+    await this.audioSystem.loadHitsounds();
+
+    // Remove pointer cursor default so it can be hidden on keypress
+    this.app.renderer.events.cursorStyles.pointer = "inherit";
+
+    this.app.stage.eventMode = "passive";
+
+    ref.appendChild(this.app.canvas);
+
+    // For the debugger extension to detect the app
+    window.__PIXI_APP__ = this.app;
+
+    this.recalculateLayout();
+
+    Tap.renderTexture = null;
+    BarKey.markerGraphicsContext = null;
+    CircleKey.bottomContainerBgGraphicsContext = null;
+    CircleKey.markerGraphicsContext = null;
+    DiamondKey.bottomContainerBgGraphicsContext = null;
+    DiamondKey.markerGraphicsContext = null;
+    DiamondHold.tailGraphicsContext = null;
+    ArrowHold.tailGraphicsContext = null;
+    StageLight.graphicsContext = null;
+
+    if (this.replayPlayer) {
+      this.addReplayText();
+    }
+
+    if (this.settings.ui.showScore) {
+      this.addScoreText();
+    }
+    this.addStageContainer();
+
+    if (this.settings.ui.showCombo) {
+      this.addComboText();
+    }
+
+    if (this.settings.ui.showAccuracy) {
+      this.addAccuracyText();
+    }
+    if (this.settings.style === "bars") {
+      this.addStageHint();
+
+      if (!this.settings.performanceMode) {
+        this.addStageLights();
+      }
+    }
+
+    this.addKeys();
+
+    if (!this.replayPlayer && this.settings.touch.enabled) {
+      this.addTouchHitboxes();
+    }
+
+    if (this.settings.ui.showJudgement) {
+      this.addJudgement();
+    }
+
+    if (this.settings.ui.judgementCounter !== null) {
+      this.addJudgementCounter();
+    }
+
+    if (this.settings.ui.kpsCounter !== null) {
+      this.addKpsCounter();
+    }
+
+    this.addHitObjects();
+
+    if (this.settings.ui.progressDisplay !== null) {
+      this.addProgressBar();
+    }
+    this.addStartMessage();
+
+    this.addCountdown();
+
+    if (this.settings.showFpsCounter) {
+      this.addFpsCounter();
+    }
+
+    if (this.settings.showErrorBar) {
+      this.addHitError();
+    }
+
+    if (this.settings.ui.showHealthBar) {
+      this.addHealthBar();
+    }
+
+    // Set initial Y positions
+    this.updateHitObjects();
+
+    this.resize();
+    this.setShowHud(showHud);
+
+    window.addEventListener("resize", this.resize);
+
+    // Game loop
+    this.app.ticker.add((time) => this.update(time));
+  }
+
+  private update(time: Ticker) {
+    this.fps?.update(time.FPS);
+    this.inputSystem.updateGamepadInputs();
+
+    if (this.inputSystem.pauseTapped && !this.finished) {
+      this.setIsPaused((prev) => !prev);
+    }
+
+    switch (this.state) {
+      case "WAIT":
+        if (this.replayPlayer || this.inputSystem.anyColumnTapped()) {
+          this.app.stage.removeChild(this.startMessage);
+
+          if (this.startTime > 3000) {
+            this.countdown.view.alpha = 1;
+          }
+
+          this.play();
+        }
+
+        break;
+
+      case "PLAY":
+        this.playUpdate();
+        break;
+
+      case "PAUSE":
+        break;
+
+      case "UNPAUSE":
+        if (this.pauseCountdown <= 0) {
+          this.play();
+          break;
+        }
+
+        this.countdown.update(this.pauseCountdown, this.settings.unpauseDelay);
+        this.pauseCountdown -= time.elapsedMS;
+
+        break;
+
+      case "FAIL":
+        if (!this.finished) {
+          this.finished = true;
+          this.fail();
+        }
+
+        break;
+      default:
+        break;
+    }
+
+    this.inputSystem.clearInputs();
+    this.audioSystem.playedSounds.clear();
+  }
+
+  private playUpdate(isAfterSeek?: boolean) {
+    this.timeElapsed = Math.round(this.song.seek() * 1000);
+
+    // Play video if it exists, accounting for audio delay
+    if (
+      this.state === "PLAY" &&
+      this.videoEl?.paused &&
+      this.timeElapsed > this.delay
+    ) {
+      this.videoEl.currentTime = this.song.seek();
+      this.videoEl.play();
+    }
+
+    this.replayPlayer?.update(this.timeElapsed, isAfterSeek);
+
+    this.kpsCounter?.update();
+
+    if (!this.mods.autoplay) {
+      this.stageLights.forEach((stageLight) => stageLight.update());
+      this.keys.forEach((key) => key.update());
+    }
+
+    if (this.timeElapsed < this.startTime) {
+      this.countdown.update(this.startTime - this.timeElapsed, this.startTime);
+    } else {
+      this.countdown.updateBreak();
+    }
+
+    while (this.timeElapsed >= this.nextTimingPoint?.time) {
+      this.currentTimingPoint = this.nextTimingPoint;
+      this.nextTimingPoint =
+        this.timingPoints[this.timingPoints.indexOf(this.nextTimingPoint) + 1];
+    }
+
+    this.progress?.update(this.timeElapsed, this.startTime, this.endTime);
+
+    if (this.timeElapsed > this.endTime && !this.finished) {
+      this.finished = true;
+      this.finish();
+    }
+
+    const oldHealth = this.healthSystem.health;
+
+    this.updateHitObjects();
+
+    if (this.healthBar && this.healthSystem.health !== oldHealth) {
+      const lostHealth = this.healthSystem.health < oldHealth;
+      this.healthBar.setHealth(this.healthSystem.health, lostHealth);
+    }
+
+    if (this.healthSystem.health <= MIN_HEALTH && !this.mods.noFail) {
+      this.state = "FAIL";
+    }
+
+    if (!isAfterSeek) {
+      this.judgement?.showJudgement();
+    }
+  }
+
+  public getNextHitObject(columnId: number) {
+    return this.columns[columnId][this.currentColumnIndices[columnId]];
+  }
+
+  private addReplayText() {
+    const style = new TextStyle({
+      fill: "transparent",
+      stroke: 0xffffff,
+      fontFamily: "RobotoMono",
+      fontSize: 80,
+      dropShadow: {
+        alpha: 0.1,
+        angle: 0,
+        blur: 5,
+        color: 0x000000,
+        distance: 0,
+      },
+    });
+
+    this.replayText = new BitmapText({
+      text: "Replay",
+      style,
+    });
+
+    this.replayText.anchor.set(0.5, 0.5);
+    this.replayText.y = 50;
+    this.replayText.x = this.app.screen.width / 2;
+    this.replayText.alpha = 0.35;
+
+    this.app.stage.addChild(this.replayText);
+  }
+
+  private addProgressBar() {
+    if (this.settings.ui.progressDisplay === "bar") {
+      this.progress = new ProgressBar(this);
+    } else {
+      this.progress = new ProgressPie(this);
+    }
+
+    this.app.stage.addChild(this.progress.view);
+  }
+
+  private addHealthBar() {
+    this.healthBar = new HealthBar(this);
+
+    this.app.stage.addChild(this.healthBar.view);
+  }
+
+  private addHitError() {
+    this.errorBar = new ErrorBar(this);
+
+    this.app.stage.addChild(this.errorBar.view);
+  }
+
+  private addScoreText() {
+    const style = new TextStyle({
+      fill: 0xdddddd,
+      fontFamily: "RobotoMono",
+      fontSize: 50,
+      fontWeight: "400",
+      dropShadow: {
+        alpha: 0.8,
+        angle: 0,
+        blur: 5,
+        color: 0x000000,
+        distance: 0,
+      },
+    });
+
+    this.scoreText = new BitmapText({
+      text: "00000000",
+      style,
+    });
+
+    this.scoreText.anchor.set(1, 0);
+    this.scoreText.y = 30;
+    this.scoreText.zIndex = 99;
+
+    this.app.stage.addChild(this.scoreText);
+  }
+
+  private addComboText() {
+    this.comboText = new BitmapText({
+      text: "",
+      style: {
+        fill: 0xdddddd,
+        fontFamily: "RobotoMono",
+        fontSize: 30,
+        fontWeight: "800",
+      },
+    });
+
+    this.comboText.anchor.set(0.5);
+    this.comboText.zIndex = 99;
+
+    this.app.stage.addChild(this.comboText);
+  }
+
+  private addAccuracyText() {
+    const style = new TextStyle({
+      fill: 0xdddddd,
+      fontFamily: "Courier New",
+      fontSize: 30,
+      fontWeight: "700",
+      dropShadow: {
+        alpha: 0.8,
+        angle: 0,
+        blur: 5,
+        color: 0x000000,
+        distance: 0,
+      },
+    });
+
+    this.accuracyText = new BitmapText({
+      text: "100.00%",
+      style,
+    });
+
+    this.accuracyText.anchor.set(1, 0);
+    this.accuracyText.y = 105;
+
+    this.app.stage.addChild(this.accuracyText);
+  }
+
+  private addStageContainer() {
+    this.stageBackground = new Graphics()
+      .rect(0, 0, this.notesContainerWidth, this.app.screen.height)
+      .fill(0x111111);
+    this.stageBackground.alpha = this.settings.stageOpacity;
+    this.notesContainer.addChild(this.stageBackground);
+
+    this.stageSides = new Graphics();
+    this.stageSides.alpha = this.settings.stageSidesOpacity;
+    this.stageContainer.addChild(this.stageSides);
+
+    this.notesContainer.x = this.stageSideWidth;
+    this.notesContainer.interactiveChildren = false;
+
+    this.stageContainer.eventMode = "passive";
+    this.stageContainer.addChild(this.notesContainer);
+
+    if (this.settings.upscroll) {
+      this.stageContainer.scale.y = -1;
+    }
+
+    if (this.mods.cover) {
+      this.stageCover = new StageCover(this);
+      this.notesContainer.addChild(this.stageCover.view);
+    }
+
+    this.app.stage.addChild(this.stageContainer);
+  }
+
+  private addStageLights() {
+    for (let i = 0; i < this.difficulty.keyCount; i++) {
+      const stageLight = new StageLight(this, i);
+
+      this.notesContainer.addChild(stageLight.view);
+
+      this.stageLights.push(stageLight);
+    }
+  }
+
+  private addStageHint() {
+    this.stageHint = new StageHint(this);
+
+    this.notesContainer.addChild(this.stageHint.view);
+  }
+
+  private addKeys() {
+    for (let i = 0; i < this.difficulty.keyCount; i++) {
+      const key = new this.keyClass(this, i);
+
+      this.keysContainer.addChild(key.view);
+      this.keysContainer.eventMode = "static";
+
+      this.notesContainer.addChild(this.keysContainer);
+      this.keys.push(key);
+    }
+
+    this.keys.forEach((key) => key.resize());
+  }
+
+  private addHitObjects() {
+    const hitObjects = this.hitObjects.map((hitObjectData) => {
+      if (hitObjectData.type === "tap") {
+        return new this.tapClass(this, hitObjectData);
+      } else {
+        return new this.holdClass(this, hitObjectData);
+      }
+    });
+
+    if (this.stageCover) {
+      hitObjects.forEach((hitObject) => {
+        hitObject.view.mask = this.stageCover.view;
+      });
+    }
+
+    for (let i = 0; i < this.difficulty.keyCount; i++) {
+      this.columns.push(
+        hitObjects.filter((hitObject) => hitObject.data.column === i),
+      );
+      this.currentColumnIndices.push(0);
+    }
+  }
+
+  private addTouchHitboxes() {
+    this.touchHitboxes = new TouchHitboxes(this);
+    this.app.stage.addChild(this.touchHitboxes.view);
+  }
+
+  private addJudgement() {
+    this.judgement = new Judgement(this);
+
+    this.app.stage.addChild(this.judgement.view);
+  }
+
+  private addJudgementCounter() {
+    this.judgementCounter = new JudgementCounter(this);
+    this.app.stage.addChild(this.judgementCounter.view);
+  }
+
+  private addKpsCounter() {
+    this.kpsCounter = new KpsCounter(this);
+    this.app.stage.addChild(this.kpsCounter.view);
+  }
+
+  private addFpsCounter() {
+    this.fps = new Fps(this);
+    this.app.stage.addChild(this.fps.view);
+  }
+
+  private addStartMessage() {
+    this.startMessage = new BitmapText({
+      text: "Press any key to Start",
+      style: {
+        fill: 0xdddddd,
+        fontFamily: "VarelaRound",
+        fontSize: 30,
+        fontWeight: "400",
+        lineHeight: 0,
+      },
+    });
+
+    this.startMessage.pivot.set(
+      this.startMessage.width / 2,
+      this.startMessage.height / 2,
+    );
+
+    this.startMessage.x = this.app.screen.width / 2;
+    this.startMessage.y = this.app.screen.height / 2;
+
+    this.app.stage.addChild(this.startMessage);
+  }
+
+  private addCountdown() {
+    this.countdown = new Countdown(this);
+    this.app.stage.addChild(this.countdown.view);
+  }
+
+  public setSfxVolume(volume: number) {
+    this.settings.sfxVolume = volume;
+  }
+
+  public pause() {
+    this.videoEl?.pause();
+    this.song.pause();
+    this.state = "PAUSE";
+  }
+
+  public resume() {
+    if (this.song.seek() === 0) {
+      this.state = "WAIT";
+    } else {
+      this.play();
+    }
+  }
+
+  public play() {
+    const shouldShowUnpauseCountdown =
+      this.state === "PAUSE" &&
+      this.timeElapsed > this.startTime &&
+      this.settings.unpauseDelay > 0 &&
+      (this.countdown.break == null ||
+        this.countdown.break.endTime - this.timeElapsed <
+          this.settings.unpauseDelay);
+
+    if (shouldShowUnpauseCountdown) {
+      // Replace break countdown, if it exists, with unpause countdown
+      this.countdown.break = null;
+
+      this.pauseCountdown = this.settings.unpauseDelay;
+      this.state = "UNPAUSE";
+    } else {
+      if (this.videoEl) {
+        this.videoEl.currentTime = this.song.seek();
+        this.videoEl.play();
+      }
+
+      this.song.play();
+      this.state = "PLAY";
+    }
+  }
+
+  public seek(time: number) {
+    for (const column of this.columns) {
+      for (const hitObject of column) {
+        hitObject.view.visible = false;
+      }
+    }
+
+    this.currentColumnIndices = this.columns.map(() => 0);
+
+    // Reset systems
+    this.scoreSystem = new ScoreSystem(this, this.hitObjects.length);
+    this.healthSystem = new HealthSystem(this);
+    this.inputSystem.dispose();
+    this.inputSystem = new InputSystem(this);
+
+    this.currentTimingPoint = this.timingPoints[0];
+    this.nextTimingPoint = this.timingPoints[1];
+
+    this.timelineData = [];
+
+    if (this.replayPlayer) {
+      this.replayPlayer.currentEventIndex = 0;
+    }
+
+    this.countdown.break = null;
+
+    if (this.kpsCounter) {
+      this.kpsCounter.timestamps.length = 0;
+      this.kpsCounter.total = 0;
+    }
+
+    this.song.seek(time);
+
+    this.timeElapsed = Math.round(time * 1000);
+    if (this.videoEl) {
+      this.videoEl.currentTime = time;
+    }
+
+    this.playUpdate(true);
+
+    if (this.judgement) {
+      this.judgement.judgementToShow = null;
+    }
+  }
+
+  private async finish() {
+    if (
+      this.mods.accuracyChallenge?.mode === "maxAchievable" &&
+      this.scoreSystem.accuracy < this.mods.accuracyChallenge.minAccuracy
+    ) {
+      this.fail();
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    this.scoreSystem.score = Math.round(this.scoreSystem.score);
+
+    // Record remaining release inputs
+    for (let i = 0; i < this.difficulty.keyCount; i++) {
+      this.replayRecorder?.record(i, false);
+    }
+
+    const applauseFile = this.settings.skin.sounds.applause;
+    if (applauseFile === CUSTOM_SOUND_OPTION) {
+      const customSound = await idb.getCustomSound("applause");
+      if (customSound) {
+        const url = createObjectURLWithExtension(customSound.file as File);
+
+        new Howl({
+          src: [url],
+          preload: true,
+          autoplay: true,
+          onloaderror: (_, error) => {
+            console.warn(error);
+            URL.revokeObjectURL(url);
+          },
+          onplayerror: (_, error) => {
+            console.warn(error);
+          },
+          onend: () => {
+            URL.revokeObjectURL(url);
+          },
+        });
+      }
+    } else if (applauseFile) {
+      new Howl({
+        src: [`${BASE_PATH}/skin/sounds/applause/${applauseFile}`],
+        preload: true,
+        autoplay: true,
+        onloaderror: (_, error) => {
+          console.warn(error);
+        },
+        onplayerror: (_, error) => {
+          console.warn(error);
+        },
+      });
+    }
+
+    this.setResults();
+  }
+
+  private async fail() {
+    this.song.stop();
+    this.videoEl?.pause();
+
+    if (this.settings.retryOnFail) {
+      this.retry();
+      return;
+    }
+
+    this.scoreSystem.score = Math.round(this.scoreSystem.score);
+
+    // Record remaining release inputs
+    for (let i = 0; i < this.difficulty.keyCount; i++) {
+      this.replayRecorder?.record(i, false);
+    }
+
+    const failFile = this.settings.skin.sounds.fail;
+    if (failFile === CUSTOM_SOUND_OPTION) {
+      const customSound = await idb.getCustomSound("fail");
+      if (customSound) {
+        const url = createObjectURLWithExtension(customSound.file as File);
+
+        new Howl({
+          src: [url],
+          preload: true,
+          autoplay: true,
+          onloaderror: (_, error) => {
+            console.warn(error);
+            URL.revokeObjectURL(url);
+          },
+          onplayerror: (_, error) => {
+            console.warn(error);
+          },
+          onend: () => {
+            URL.revokeObjectURL(url);
+          },
+        });
+      }
+    } else if (failFile) {
+      new Howl({
+        src: [`${BASE_PATH}/skin/sounds/fail/${failFile}`],
+        preload: true,
+        autoplay: true,
+        onloaderror: (_, error) => {
+          console.warn(error);
+        },
+        onplayerror: (_, error) => {
+          console.warn(error);
+        },
+      });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    this.setResults(true);
+  }
+
+  // Returns the px offset of the hit object from the judgement line based on
+  // how long it should take to reach the line
+  public getHitObjectOffset(startTime: number, endTime: number) {
+    if (this.mods.constantSpeed) {
+      const speed =
+        this.hitPosition / (MAX_TIME_RANGE / this.settings.scrollSpeed);
+
+      const offset = ((endTime - startTime) * speed) / this.mods.playbackRate;
+
+      return offset;
+    }
+
+    const flipped = startTime > endTime;
+    if (flipped) {
+      [startTime, endTime] = [endTime, startTime];
+    }
+
+    const currentTimingPointIndex = this.timingPoints.findIndex(
+      (timingPoint) => startTime >= timingPoint.time,
+    );
+
+    let totalOffset = 0;
+    for (let i = currentTimingPointIndex; i < this.timingPoints.length; i++) {
+      const currentTimingPoint = this.timingPoints[i];
+      const nextTimingPoint = this.timingPoints[i + 1];
+
+      const intervalStart = Math.max(currentTimingPoint.time, startTime);
+      const intervalEnd = nextTimingPoint
+        ? Math.min(nextTimingPoint.time, endTime)
+        : endTime;
+
+      if (intervalStart < intervalEnd) {
+        const duration = intervalEnd - intervalStart;
+        const speed =
+          this.hitPosition / (MAX_TIME_RANGE / currentTimingPoint.scrollSpeed);
+
+        totalOffset += (duration * speed) / this.mods.playbackRate;
+      }
+    }
+
+    return flipped ? -totalOffset : totalOffset;
+  }
+
+  public updateHitObjects() {
+    this.columns.forEach((column, columnIndex) => {
+      let i = this.currentColumnIndices[columnIndex];
+
+      while (i < column.length) {
+        const hitObject = column[i];
+
+        hitObject.update();
+
+        // If you failed, you're done - no need to update any more hit objects
+        if (this.healthSystem?.health === MIN_HEALTH && !this.mods.noFail) {
+          return;
+        }
+
+        // If this hit object is above the top screen edge, there's no need to update the rest
+        if (hitObject.view.y < 0) {
+          break;
+        }
+
+        i++;
+      }
+    });
+  }
+}

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="WebOsuMania.Native.EditorPage"
+             Title="Map editor">
+    <VerticalStackLayout Padding="18" Spacing="12">
+        <Label Text="Map editor" FontSize="26" FontAttributes="Bold" />
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <Entry x:Name="TitleEntry" Placeholder="Map title" />
+            <Button Grid.Column="1" Text="Add note" Clicked="AddNoteClicked" />
+        </Grid>
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <Entry x:Name="TimeEntry" Placeholder="Time in ms" Keyboard="Numeric" />
+            <Button Grid.Column="1" Text="Export" Clicked="ExportClicked" />
+        </Grid>
+
+        <CollectionView x:Name="NoteList" EmptyView="No notes yet. Add a timing and click Add note.">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border Padding="12,10" Margin="0,4" StrokeThickness="1" Stroke="#2A2F45" Background="#111827">
+                        <Label Text="{Binding}" FontSize="16" />
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </VerticalStackLayout>
+</ContentPage>

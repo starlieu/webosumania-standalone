@@ -1,0 +1,237 @@
+import type { ReplayData } from "@/osuMania/systems/replayRecorder";
+import { compressSync } from "fflate";
+import type { DBSchema, IDBPDatabase } from "idb";
+import { openDB } from "idb";
+
+export type IdbFile = {
+  file: Blob;
+  dateAdded: number;
+};
+
+export type StoreName =
+  "beatmapFiles" | "replayFiles" | "userData" | "customSounds";
+
+interface MyDB extends DBSchema {
+  beatmapFiles: {
+    key: string;
+    value: IdbFile;
+    indexes: {
+      "by-date": number;
+    };
+  };
+  replayFiles: {
+    key: string;
+    value: IdbFile;
+    indexes: {
+      "by-date": number;
+    };
+  };
+  userData: {
+    key: string;
+    value: string;
+  };
+  customSounds: {
+    key: string;
+    value: IdbFile;
+  };
+}
+
+class Idb {
+  public db: Promise<IDBPDatabase<MyDB>>;
+
+  constructor() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    this.init();
+  }
+
+  public init() {
+    this.db = openDB<MyDB>("webOsuMania", 4, {
+      upgrade(db, oldVersion, newVersion, transaction) {
+        if (oldVersion < 1) {
+          const beatmapStore = db.createObjectStore("beatmapFiles");
+          beatmapStore.createIndex("by-date", "dateAdded");
+        }
+
+        if (oldVersion < 2) {
+          const replayStore = db.createObjectStore("replayFiles");
+          replayStore.createIndex("by-date", "dateAdded");
+        }
+
+        if (oldVersion < 3) {
+          const userDataStore = db.createObjectStore("userData");
+
+          const savedBeatmapSetsStr = localStorage.getItem("savedBeatmapSets");
+          if (savedBeatmapSetsStr) {
+            const data = JSON.parse(savedBeatmapSetsStr);
+
+            const value = JSON.stringify({
+              state: {
+                collections: {
+                  Saved: Object.hasOwn(data, "state")
+                    ? data.state.savedBeatmapSets
+                    : data,
+                },
+              },
+              version: 0,
+            });
+
+            userDataStore.put(value, "collections");
+          }
+        }
+
+        if (oldVersion < 4) {
+          db.createObjectStore("customSounds");
+        }
+      },
+    });
+  }
+
+  public async getStoreKeys(storeName: StoreName) {
+    const db = await this.db;
+    const keys = await db.getAllKeys(storeName);
+
+    return keys;
+  }
+
+  public async getStoreValue(storeName: StoreName, id: string) {
+    const db = await this.db;
+    const file = await db.get(storeName, id.toString());
+
+    return file;
+  }
+
+  public async saveToStore(
+    storeName: StoreName,
+    blob: Blob,
+    id: string,
+    dateAdded: number,
+  ) {
+    const db = await this.db;
+
+    await db.put(
+      storeName,
+      {
+        file: blob,
+        dateAdded,
+      },
+      id,
+    );
+  }
+
+  public async getBeatmapCount() {
+    const db = await this.db;
+
+    if (!db) {
+      return 0;
+    }
+
+    const count = await db.count("beatmapFiles");
+
+    return count;
+  }
+
+  public async getBeatmap(id: number) {
+    const db = await this.db;
+    const file = await db.get("beatmapFiles", id.toString());
+
+    return file;
+  }
+
+  public async deleteBeatmap(id: number) {
+    const db = await this.db;
+    await db.delete("beatmapFiles", id.toString());
+  }
+
+  public async clearBeatmapSets() {
+    try {
+      const db = await this.db;
+      db.clear("beatmapFiles");
+    } catch (error: any) {
+      console.warn(error.name);
+    }
+  }
+
+  public async putBeatmapSet(id: number, file: Blob) {
+    try {
+      await this.saveToStore("beatmapFiles", file, id.toString(), Date.now());
+    } catch (error: any) {
+      if (error.code === DOMException.QUOTA_EXCEEDED_ERR) {
+        await this.clearBeatmapSets();
+        throw error;
+      }
+    }
+  }
+
+  public async saveReplay(replayData: ReplayData, id: string): Promise<string> {
+    const db = await this.db;
+
+    const replayDataString = JSON.stringify(replayData);
+    const encoded = new TextEncoder().encode(replayDataString);
+    const compressed = compressSync(encoded);
+    const file = new Blob([compressed as BlobPart], {
+      type: "application/octet-stream",
+    });
+
+    try {
+      await this.saveToStore("replayFiles", file, id, Date.now());
+    } catch (error: any) {
+      if (error.code === DOMException.QUOTA_EXCEEDED_ERR) {
+        await db.clear("replayFiles");
+        throw error;
+      }
+    }
+
+    return id;
+  }
+
+  public async deleteReplay(id: string): Promise<void> {
+    const db = await this.db;
+    await db.delete("replayFiles", id);
+  }
+
+  public async getReplay(id: string) {
+    const db = await this.db;
+    const result = await db.get("replayFiles", id);
+
+    return result;
+  }
+
+  public async clearReplays(): Promise<void> {
+    const db = await this.db;
+    await db.clear("replayFiles");
+  }
+
+  public async saveCustomSound(name: string, blob: Blob): Promise<void> {
+    const db = await this.db;
+    await db.put(
+      "customSounds",
+      {
+        file: blob,
+        dateAdded: Date.now(),
+      },
+      name,
+    );
+  }
+
+  public async getCustomSound(name: string) {
+    const db = await this.db;
+    const result = await db.get("customSounds", name);
+
+    return result;
+  }
+
+  public async deleteCustomSound(name: string): Promise<void> {
+    const db = await this.db;
+    await db.delete("customSounds", name);
+  }
+
+  public async clearCustomSounds() {
+    const db = await this.db;
+    await db.clear("customSounds");
+  }
+}
+
+export const idb = new Idb();

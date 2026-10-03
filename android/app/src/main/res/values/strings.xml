@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Web osu!mania</string>
+    <string name="title_activity_main">Web osu!mania</string>
+    <string name="package_name">com.webosumania.app</string>
+    <string name="custom_url_scheme">com.webosumania.app</string>
+</resources>

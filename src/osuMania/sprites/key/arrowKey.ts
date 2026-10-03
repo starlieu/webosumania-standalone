@@ -1,0 +1,59 @@
+import { BASE_PATH } from "@/lib/utils";
+import { Container, Sprite } from "pixi.js";
+import { Key } from "./key";
+
+export class ArrowKey extends Key {
+  protected marker: Sprite;
+
+  protected override setKeyGraphics() {
+    const width = this.game.scaledColumnWidth * this.game.settings.noteScale;
+    const height = this.game.scaledColumnWidth * this.game.settings.noteScale;
+
+    const bg = Sprite.from(
+      this.game.settings.style === "arrows"
+        ? `${BASE_PATH}/skin/arrowOutline.svg`
+        : `${BASE_PATH}/skin/arrowThickOutline.svg`,
+    );
+    bg.anchor.set(0.5);
+    bg.width = width;
+    bg.height = height;
+    bg.angle = this.game.laneArrowDirections[this.columnId];
+
+    this.marker = Sprite.from(
+      this.game.settings.style === "arrows"
+        ? `${BASE_PATH}/skin/arrow.svg`
+        : `${BASE_PATH}/skin/arrowThick.svg`,
+    );
+    this.marker.anchor.set(0.5);
+    this.marker.angle = this.game.laneArrowDirections[this.columnId];
+    this.marker.width = width;
+    this.marker.height = height;
+    this.marker.alpha = 0;
+
+    const bottomContainer = new Container();
+    bottomContainer.addChild(bg);
+    bottomContainer.addChild(this.marker);
+    bottomContainer.x = this.game.scaledColumnWidth / 2;
+    bottomContainer.y = -this.game.hitPositionOffset;
+
+    if (this.game.settings.upscroll) {
+      bottomContainer.scale.y = -bottomContainer.scale.y;
+    }
+
+    this.view.addChild(bottomContainer);
+
+    this.view.zIndex = -3;
+  }
+
+  public override setPressed(pressed: boolean) {
+    if (!this.game.settings.ui.receptorLighting) {
+      return;
+    }
+
+    if (pressed) {
+      this.marker.alpha = 0.7;
+    } else {
+      this.marker.alpha = 0.0;
+    }
+  }
+}

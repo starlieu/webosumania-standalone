@@ -1,0 +1,85 @@
+import { gsap } from "gsap";
+import type { Container } from "pixi.js";
+import { FillGradient, Graphics, GraphicsContext } from "pixi.js";
+import type { Game } from "../game";
+
+export class StageLight {
+  static graphicsContext: GraphicsContext | null;
+
+  public game: Game;
+
+  private columnId: number;
+  public view: Container;
+
+  constructor(game: Game, columnId: number) {
+    this.game = game;
+
+    this.columnId = columnId;
+
+    const width = game.scaledColumnWidth;
+    const height = game.app.screen.height * 0.3;
+
+    if (!StageLight.graphicsContext) {
+      const fillGradient = new FillGradient({
+        start: {
+          x: 0,
+          y: 1,
+        },
+        end: {
+          x: 0,
+          y: 0,
+        },
+        colorStops: [
+          {
+            offset: 0,
+            color: "white",
+          },
+          {
+            offset: 1,
+            color: "transparent",
+          },
+        ],
+      });
+
+      StageLight.graphicsContext = new GraphicsContext()
+        .rect(0, 0, width, height)
+        .fill(fillGradient);
+    }
+
+    this.view = new Graphics(StageLight.graphicsContext);
+    this.view.tint = game.laneColors[columnId].tap;
+    this.view.x = columnId * (width + game.settings.laneSpacing);
+    this.view.pivot.y = height;
+    this.view.alpha = 0;
+  }
+
+  public update() {
+    if (!this.game.settings.ui.receptorLighting) {
+      return;
+    }
+
+    if (this.game.inputSystem.pressedColumns[this.columnId]) {
+      gsap.killTweensOf(this.view);
+      this.view.alpha = 0.5 * this.game.settings.ui.receptorOpacity;
+    }
+
+    if (this.game.inputSystem.releasedColumns[this.columnId]) {
+      this.light();
+    }
+  }
+
+  public resize() {
+    this.view.height = this.game.app.screen.height * 0.35;
+    this.view.y = this.game.hitPosition;
+  }
+
+  public light() {
+    this.view.alpha = 0.5 * this.game.settings.ui.receptorOpacity;
+
+    const quickAlpha = gsap.quickTo(this.view, "alpha", {
+      duration: 0.3,
+    });
+
+    quickAlpha(0);
+  }
+}

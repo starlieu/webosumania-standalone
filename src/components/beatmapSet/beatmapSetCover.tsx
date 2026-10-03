@@ -1,0 +1,140 @@
+import { getDiffColour } from "@/lib/colors";
+import type { Beatmap, BeatmapSet, Status } from "@/lib/osuApi";
+import { cn, secondsToMMSS } from "@/lib/utils";
+import { Clock, Metronome } from "lucide-react";
+import {
+  BEATMAP_COVER_PROVIDERS,
+  useSettingsStore,
+} from "../../stores/settingsStore";
+
+const getStatusClass = (status: Status) => {
+  switch (status) {
+    case "ranked":
+      return "bg-[#b3ff66] text-[#394246]"; // Green
+    case "qualified":
+      return "bg-[#66ccff] text-[#394246]"; // Blue
+    case "loved":
+      return "bg-[#ff66ab] text-[#394246]"; // Pink
+    case "pending":
+      return "bg-[#ffd966] text-[#394246]"; // Yellow
+    case "wip":
+      return "bg-[#ff9966] text-[#394246]"; // Orange
+    case "graveyard":
+      return "bg-black text-[#5c6970]"; // Gray
+    case "local":
+      return "bg-[#8ad4ff] text-[#1f2a33]"; // Cyan
+  }
+};
+
+const BeatmapSetCover = ({
+  beatmapSet,
+  filteredBeatmaps,
+}: {
+  beatmapSet: BeatmapSet;
+  filteredBeatmaps: Beatmap[];
+}) => {
+  const beatmapCoverProvider = useSettingsStore.use.beatmapCoverProvider();
+  const customBeatmapCoverProvider =
+    useSettingsStore.use.customBeatmapCoverProvider();
+  const hideBeatmapSetCovers = useSettingsStore.use.hideBeatmapSetCovers();
+  const preferMetadataInOriginalLanguage =
+    useSettingsStore.use.preferMetadataInOriginalLanguage();
+
+  const coverUrl =
+    beatmapSet.coverUrl ??
+    (beatmapSet.status === "local"
+      ? undefined
+      : (beatmapCoverProvider !== "Custom"
+          ? BEATMAP_COVER_PROVIDERS[beatmapCoverProvider]
+          : customBeatmapCoverProvider
+        ).replace("$setId", beatmapSet.id.toString()));
+
+  const artist = preferMetadataInOriginalLanguage
+    ? beatmapSet.artist_unicode
+    : beatmapSet.artist;
+
+  const title = preferMetadataInOriginalLanguage
+    ? beatmapSet.title_unicode
+    : beatmapSet.title;
+
+  return (
+    <>
+      {/* Background cover */}
+      <span
+        className={cn(
+          "bg-card absolute inset-0 -z-10 transition duration-300 group-hover:brightness-[0.5]",
+          !hideBeatmapSetCovers && "brightness-[0.3]",
+        )}
+      >
+        {!hideBeatmapSetCovers && (
+          <img
+            src={coverUrl}
+            alt="Beatmap Set Cover"
+            // fill
+            className="h-full w-full object-cover"
+            sizes="720px"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        )}
+      </span>
+
+      {/* Details */}
+      <div className="mt-auto">
+        <div className="flex items-center gap-1.5">
+          {beatmapSet.status && (
+            <div
+              className={cn(
+                "w-fit rounded-full px-1.5 text-xs font-bold",
+                getStatusClass(beatmapSet.status),
+              )}
+            >
+              {beatmapSet.status.toUpperCase()}
+            </div>
+          )}
+
+          {/* Difficulty dots */}
+          <div className="flex gap-0.5">
+            {filteredBeatmaps.map((beatmap) => (
+              <div
+                key={beatmap.id}
+                className="h-3 w-1.5 rounded-full bg-red-400"
+                style={{
+                  backgroundColor: getDiffColour(beatmap.difficulty_rating),
+                }}
+              ></div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-0.5 w-full truncate text-xl" title={title}>
+          {title}
+        </div>
+        <div className="flex w-full items-end justify-between gap-1">
+          <span className="text-primary truncate text-sm" title={artist}>
+            by {artist}
+          </span>
+
+          <div className="flex gap-2">
+            {beatmapSet.beatmaps[0].bpm != null && (
+              <span className="text-muted-foreground flex items-center gap-0.5 text-sm">
+                <Metronome className="size-5" />
+                {Math.max(...beatmapSet.beatmaps.map((beatmap) => beatmap.bpm))}
+              </span>
+            )}
+            <span className="text-muted-foreground flex items-center gap-0.5 text-sm">
+              <Clock className="size-5" />
+              {secondsToMMSS(
+                Math.max(
+                  ...beatmapSet.beatmaps.map((beatmap) => beatmap.total_length),
+                ),
+              )}
+            </span>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default BeatmapSetCover;

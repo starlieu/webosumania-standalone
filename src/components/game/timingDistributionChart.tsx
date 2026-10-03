@@ -1,0 +1,107 @@
+import { JUDGEMENTS, JUDGEMENT_COLORS } from "@/osuMania/constants";
+import type { Judgement } from "@/types";
+import { Bar, BarChart, Cell, XAxis } from "recharts";
+import { ChartContainer } from "../ui/chart";
+
+const BIN_COUNT = 101;
+const TICK_COUNT = 11;
+
+export type HitError = {
+  error: number;
+  judgement: Judgement;
+};
+
+type Bin = {
+  x: number;
+} & Record<Judgement, number>;
+
+function createTimingHistogram(
+  hitErrors: HitError[],
+  binCount: number,
+  domain: [number, number],
+): Bin[] {
+  const [min, max] = domain;
+  const binSize = (max - min) / (binCount - 1);
+
+  const bins: Record<number, Record<Judgement, number>> = {};
+  for (let i = 0; i < binCount; i++) {
+    bins[i] = { 320: 0, 300: 0, 200: 0, 100: 0, 50: 0, 0: 0 };
+  }
+
+  hitErrors.forEach(({ error, judgement }) => {
+    const index = Math.round((error - min) / binSize);
+    const clampedIndex = Math.min(index, binCount - 1);
+    bins[clampedIndex][judgement]++;
+  });
+
+  return Array.from({ length: binCount }, (_, i) => {
+    const bin = bins[i];
+    return {
+      x: min + binSize * i,
+      ...bin,
+    };
+  });
+}
+
+function generateSymmetricTicks(
+  [min, max]: [number, number],
+  tickCount: number = 11,
+): number[] {
+  const step = (max - min) / (tickCount - 1);
+  const ticks: number[] = [];
+
+  for (let i = 0; i < tickCount; i++) {
+    const tick = min + i * step;
+    ticks.push(Math.round(tick));
+  }
+
+  return ticks;
+}
+
+export default function TimingDistributionChart({
+  hitErrors,
+}: {
+  hitErrors: HitError[];
+}) {
+  const min = Math.min(...hitErrors.map((e) => e.error));
+  const max = Math.max(...hitErrors.map((e) => e.error));
+  const absMax = Math.max(Math.abs(min), Math.abs(max));
+  const domain = (absMax === 0 ? [-10, 10] : [-absMax, absMax]) as [
+    number,
+    number,
+  ];
+
+  const chartData = createTimingHistogram(hitErrors, BIN_COUNT, domain);
+  const ticks = generateSymmetricTicks(domain, TICK_COUNT);
+
+  return (
+    <ChartContainer config={{}} className="max-h-75 w-full">
+      <BarChart accessibilityLayer data={chartData}>
+        <XAxis
+          type="number"
+          dataKey="x"
+          tickLine={false}
+          ticks={ticks}
+          domain={([dataMin, dataMax]) => {
+            const absDomainMax = Math.max(Math.abs(dataMin), Math.abs(dataMax));
+            return [-absDomainMax, absDomainMax];
+          }}
+          interval={"preserveStartEnd"}
+        />
+        {JUDGEMENTS.map((judgement) => (
+          <Bar
+            isAnimationActive={false}
+            key={judgement}
+            dataKey={judgement.toString()}
+            stackId="judgement"
+            radius={4}
+          >
+            {chartData.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={JUDGEMENT_COLORS[judgement]} />
+            ))}
+          </Bar>
+        ))}
+      </BarChart>
+    </ChartContainer>
+  );
+}

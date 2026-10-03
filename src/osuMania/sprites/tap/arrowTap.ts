@@ -1,0 +1,63 @@
+import type { TapData } from "@/lib/beatmapParser";
+import { BASE_PATH } from "@/lib/utils";
+import type { Game } from "@/osuMania/game";
+import { Container, Sprite, Texture } from "pixi.js";
+import { Tap } from "./tap";
+
+export class ArrowTap extends Tap {
+  public static getArrowSprite(game: Game, column: number) {
+    if (!Tap.renderTexture) {
+      Tap.renderTexture = Texture.from(
+        game.settings.style === "arrows"
+          ? `${BASE_PATH}/skin/arrow.svg`
+          : `${BASE_PATH}/skin/arrowThick.svg`,
+      );
+    }
+
+    const width = game.scaledColumnWidth * game.settings.noteScale;
+    const height = game.scaledColumnWidth * game.settings.noteScale;
+
+    const sprite = Sprite.from(Tap.renderTexture);
+    sprite.width = width;
+    sprite.height = height;
+    sprite.zIndex = 1;
+    sprite.anchor.set(0.5);
+
+    sprite.angle = game.laneArrowDirections[column];
+
+    const container = new Container();
+    container.addChild(sprite);
+
+    if (game.settings.upscroll) {
+      container.scale.y = -container.scale.y;
+    }
+
+    return container;
+  }
+
+  constructor(game: Game, tapData: TapData) {
+    super(game, tapData);
+
+    if (!Tap.renderTexture) {
+      Tap.renderTexture = Texture.from(
+        game.settings.style === "arrows"
+          ? `${BASE_PATH}/skin/arrow.svg`
+          : `${BASE_PATH}/skin/arrowThick.svg`,
+      );
+    }
+
+    this.view = ArrowTap.getArrowSprite(game, tapData.column);
+    this.view.x =
+      tapData.column * (game.scaledColumnWidth + game.settings.laneSpacing) +
+      game.scaledColumnWidth / 2;
+    this.view.visible = false;
+
+    if (this.data.isHoldHead) {
+      this.view.tint = game.laneColors[tapData.column].holdHead;
+    } else {
+      this.view.tint = game.laneColors[tapData.column].tap;
+    }
+
+    this.game.notesContainer.addChild(this.view);
+  }
+}

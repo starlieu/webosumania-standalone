@@ -1,0 +1,43 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="WebOsuMania.Native.MainPage"
+             Title="Web osu!mania">
+
+    <Grid Padding="18" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+        <Border Padding="16" StrokeThickness="1" Stroke="#334155" Background="#0F172A" StrokeShape="RoundRectangle 14">
+            <VerticalStackLayout Spacing="6">
+                <Label Text="Offline library" FontSize="26" FontAttributes="Bold" />
+                <Label Text="Standalone beatmaps loaded from your local folders" TextColor="#CBD5E1" />
+            </VerticalStackLayout>
+        </Border>
+
+        <HorizontalStackLayout Grid.Row="1" Spacing="10">
+            <Button x:Name="RefreshButton" Text="Refresh" Clicked="RefreshButton_Clicked" />
+            <Button x:Name="PlayButton" Text="Play selected" Clicked="PlayButton_Clicked" />
+            <Button x:Name="OpenFolderButton" Text="Open folder" Clicked="OpenFolderButton_Clicked" />
+        </HorizontalStackLayout>
+
+        <Border Grid.Row="2" Padding="12" StrokeThickness="1" Stroke="#334155" Background="#0B1120" StrokeShape="RoundRectangle 16">
+            <VerticalStackLayout Spacing="10">
+                <Label x:Name="StatusLabel" Text="Scanning local files..." FontAttributes="Bold" />
+                <CollectionView x:Name="BeatmapList" SelectionMode="Single">
+                    <CollectionView.EmptyView>
+                        <Label Text="No local beatmaps found yet. Drop .osz or .osu files in your local folders." TextColor="#94A3B8" />
+                    </CollectionView.EmptyView>
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border Padding="12,10" Margin="0,4" StrokeThickness="1" Stroke="#1E293B" Background="#111827" StrokeShape="RoundRectangle 10">
+                                <VerticalStackLayout>
+                                    <Label Text="{Binding Title}" FontAttributes="Bold" FontSize="18" />
+                                    <Label Text="{Binding Details}" FontSize="12" TextColor="#94A3B8" />
+                                </VerticalStackLayout>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </Border>
+    </Grid>
+
+</ContentPage>

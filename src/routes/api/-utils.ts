@@ -1,0 +1,97 @@
+import type { BeatmapSet } from "@/lib/osuApi";
+import { env } from "cloudflare:workers";
+
+type OAuthTokenData = {
+  token_type: string;
+  expires_in: number;
+  access_token: string;
+};
+
+export const osuApiUrl = env.OSU_API_PROXY_URL || "https://osu.ppy.sh";
+
+export const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET,OPTIONS,PATCH,DELETE,POST,PUT",
+  "Access-Control-Allow-Headers":
+    "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version",
+};
+
+export async function getAccessToken() {
+  const OSU_API = env.OSU_API;
+
+  let accessToken = await OSU_API.get("osu_api_access_token");
+
+  if (!accessToken) {
+    const response: Response = await fetch(`${osuApiUrl}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Proxy-Key": env.OSU_API_PROXY_KEY,
+      },
+      body: JSON.stringify({
+        client_id: env.OSU_API_CLIENT_ID,
+        client_secret: env.OSU_API_CLIENT_SECRET,
+        grant_type: "client_credentials",
+        scope: "public",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `getAccessToken() error: ${response.status} - ${response.statusText}`,
+      );
+    }
+
+    const data: OAuthTokenData = await response.json();
+
+    accessToken = data.access_token;
+
+    await OSU_API.put("osu_api_access_token", accessToken, {
+      expirationTtl: data.expires_in,
+    });
+  }
+
+  return accessToken;
+}
+
+/**
+ * Removes unused properties from the osu API's BeatmapSet object
+ */
+export function trimBeatmapSet(beatmapSet: BeatmapSet): BeatmapSet {
+  return {
+    artist: beatmapSet.artist,
+    artist_unicode: beatmapSet.artist_unicode,
+    creator: beatmapSet.creator,
+    id: beatmapSet.id,
+    nsfw: beatmapSet.nsfw,
+    offset: beatmapSet.offset,
+    status: beatmapSet.status,
+    title: beatmapSet.title,
+    title_unicode: beatmapSet.title_unicode,
+    user_id: beatmapSet.user_id,
+    play_count: beatmapSet.play_count,
+    favourite_count: beatmapSet.favourite_count,
+    rating: beatmapSet.rating,
+    genre_id: beatmapSet.genre_id,
+    language_id: beatmapSet.language_id,
+    beatmaps: beatmapSet.beatmaps.map((beatmap) => ({
+      beatmapset_id: beatmap.beatmapset_id,
+      difficulty_rating: beatmap.difficulty_rating,
+      id: beatmap.id,
+      mode: beatmap.mode,
+      total_length: beatmap.total_length,
+      user_id: beatmap.user_id,
+      version: beatmap.version,
+      bpm: beatmap.bpm,
+      cs: beatmap.cs,
+      accuracy: beatmap.accuracy,
+      drain: beatmap.drain,
+      count_circles: beatmap.count_circles,
+      count_sliders: beatmap.count_sliders,
+    })),
+  };
+}
+
+export function getRateLimitMessage(retryAfter?: number) {
+  return `The site is being rate-limited by the osu! API, please try again ${retryAfter ? `after ${retryAfter} seconds` : "later"}.`;
+}

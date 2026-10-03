@@ -1,0 +1,509 @@
+import type { AccuracyChallengeMode } from "@/stores/settingsStore";
+import {
+  accuracyChallengeModeOptions,
+  useSettingsStore,
+} from "@/stores/settingsStore";
+import { toast } from "sonner";
+import SelectInput from "../inputs/selectInput";
+import SliderInput from "../inputs/sliderInput";
+import SwitchInput from "../inputs/switchInput";
+import { Button } from "../ui/button";
+import { SelectItem } from "../ui/select";
+import PpWarning from "./ppWarning";
+import ScoreMultiplier from "./scoreMultiplier";
+
+const ModsTab = () => {
+  const setSettings = useSettingsStore.use.setSettings();
+  const resetMods = useSettingsStore.use.resetMods();
+  const hpOverride = useSettingsStore((state) => state.mods.hpOverride);
+  const odOverride = useSettingsStore((state) => state.mods.odOverride);
+  const cover = useSettingsStore((state) => state.mods.cover);
+  const percy = useSettingsStore((state) => state.mods.percy);
+  const accuracyChallenge = useSettingsStore(
+    (state) => state.mods.accuracyChallenge,
+  );
+
+  return (
+    <>
+      <ScoreMultiplier />
+
+      <PpWarning />
+
+      <h3 className="mt-4 mb-2 text-lg font-semibold">Difficulty Reduction</h3>
+      <div className="space-y-4">
+        <SwitchInput
+          label="Easy"
+          tooltip="Larger timing windows."
+          settingPath="mods.easy"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.easy = checked;
+
+              if (checked) {
+                draft.mods.hardRock = false;
+                draft.mods.accuracyChallenge = null;
+                draft.mods.hpOverride = null;
+                draft.mods.odOverride = null;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="No Fail"
+          tooltip="You can't fail, no matter what."
+          settingPath="mods.noFail"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.noFail = checked;
+
+              if (checked) {
+                draft.mods.suddenDeath = false;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Half Time"
+          tooltip="0.75x speed (don't ask me why it's called half time)."
+          selector={(state) => state.mods.playbackRate === 0.75}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.playbackRate = 0.75;
+              } else {
+                draft.mods.playbackRate = 1;
+              }
+            })
+          }
+        />
+      </div>
+
+      <h3 className="mt-6 mb-2 text-lg font-semibold">Difficulty Increase</h3>
+      <div className="space-y-4">
+        <SwitchInput
+          label="Hard Rock"
+          tooltip="Smaller timing windows."
+          settingPath="mods.hardRock"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.hardRock = checked;
+
+              if (checked) {
+                draft.mods.easy = false;
+                draft.mods.accuracyChallenge = null;
+                draft.mods.hpOverride = null;
+                draft.mods.odOverride = null;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Sudden Death"
+          tooltip="Miss a note and fail."
+          settingPath="mods.suddenDeath"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.suddenDeath = checked;
+
+              if (checked) {
+                draft.mods.noFail = false;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Perfect"
+          tooltip="300g/300 judgements only or fail."
+          settingPath="mods.perfect"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.perfect = checked;
+
+              if (checked) {
+                draft.mods.perfectSs = false;
+                draft.mods.accuracyChallenge = null;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Perfect (SS)"
+          tooltip="300g judgements only or fail."
+          settingPath="mods.perfectSs"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.perfectSs = checked;
+
+              if (checked) {
+                draft.mods.perfect = false;
+                draft.mods.accuracyChallenge = null;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Double Time"
+          tooltip="1.5x speed (don't ask me why it's called double time)."
+          selector={(state) => state.mods.playbackRate === 1.5}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.playbackRate = 1.5;
+              } else {
+                draft.mods.playbackRate = 1;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Accuracy Challenge"
+          tooltip="Fail if your accuracy drops too low."
+          selector={(state) => !!state.mods.accuracyChallenge}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.accuracyChallenge = {
+                  minAccuracy: 0.9,
+                  mode: "maxAchievable",
+                };
+
+                draft.mods.easy = false;
+                draft.mods.noFail = false;
+                draft.mods.perfect = false;
+                draft.mods.perfectSs = false;
+              } else {
+                draft.mods.accuracyChallenge = null;
+              }
+            })
+          }
+        />
+        {accuracyChallenge && (
+          <>
+            <SliderInput
+              isSubInput
+              label="Minimum Accuracy"
+              settingPath="mods.accuracyChallenge.minAccuracy"
+              tooltip={(minAccuracy) => {
+                return `${Math.round(minAccuracy * 100)}%`;
+              }}
+              onValueChange={([minAccuracy]) =>
+                setSettings((draft) => {
+                  draft.mods.accuracyChallenge!.minAccuracy = minAccuracy;
+                })
+              }
+              min={0.6}
+              max={0.99}
+              step={0.01}
+              hideReset
+            />
+
+            <SelectInput
+              isSubInput
+              label="Mode"
+              selector={(state) => state.mods.accuracyChallenge!.mode}
+              onValueChange={(value: AccuracyChallengeMode) =>
+                setSettings((draft) => {
+                  draft.mods.accuracyChallenge!.mode = value;
+                })
+              }
+            >
+              {accuracyChallengeModeOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id.toString()}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectInput>
+          </>
+        )}
+      </div>
+
+      <h3 className="mt-6 mb-2 text-lg font-semibold">Special</h3>
+      <div className="space-y-4">
+        <SwitchInput
+          label="Autoplay"
+          tooltip="Watch a perfect automated play."
+          settingPath="mods.autoplay"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.autoplay = checked;
+            })
+          }
+        />
+      </div>
+
+      <h3 className="mt-6 mb-2 text-lg font-semibold">Conversion</h3>
+      <div className="space-y-4">
+        <SwitchInput
+          label="Random"
+          tooltip="Shuffle around the notes."
+          settingPath="mods.random"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.random = checked;
+
+              if (checked) {
+                draft.mods.mirror = false;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Mirror"
+          tooltip="Notes are flipped horizontally."
+          settingPath="mods.mirror"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.mirror = checked;
+
+              if (checked) {
+                draft.mods.random = false;
+              }
+            })
+          }
+        />
+        <SwitchInput
+          label="Constant Speed"
+          tooltip="No more scroll speed changes during a song."
+          settingPath="mods.constantSpeed"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.constantSpeed = checked;
+            })
+          }
+        />
+        <SwitchInput
+          label="Hold Off"
+          tooltip="All hold notes become normal notes."
+          settingPath="mods.holdOff"
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              draft.mods.holdOff = checked;
+            })
+          }
+        />
+      </div>
+
+      <h3 className="mt-6 mb-2 text-lg font-semibold">Custom</h3>
+      <div className="space-y-4">
+        <SliderInput
+          label="Song Speed"
+          settingPath="mods.playbackRate"
+          tooltip={(playbackRate) => `${playbackRate}x`}
+          onValueChange={([playbackRate]) =>
+            setSettings((draft) => {
+              draft.mods.playbackRate = playbackRate;
+            })
+          }
+          min={0.5}
+          max={2}
+          step={0.05}
+        />
+        <SwitchInput
+          label="Accuracy Override"
+          selector={(state) => state.mods.odOverride !== null}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.odOverride = 5;
+
+                draft.mods.easy = false;
+                draft.mods.hardRock = false;
+              } else {
+                draft.mods.odOverride = null;
+              }
+            })
+          }
+          extraInput={
+            odOverride !== null ? (
+              <SliderInput
+                containerClassName="w-full"
+                settingPath="mods.odOverride"
+                tooltip={() => odOverride}
+                onValueChange={([newOdOverride]) =>
+                  setSettings((draft) => {
+                    draft.mods.odOverride = newOdOverride;
+                  })
+                }
+                min={0}
+                max={11}
+                step={0.5}
+              />
+            ) : undefined
+          }
+        />
+        <SwitchInput
+          label="HP Drain Override"
+          selector={(state) => state.mods.hpOverride !== null}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.hpOverride = 5;
+
+                draft.mods.easy = false;
+                draft.mods.hardRock = false;
+              } else {
+                draft.mods.hpOverride = null;
+              }
+            })
+          }
+          extraInput={
+            hpOverride !== null ? (
+              <SliderInput
+                containerClassName="w-full"
+                settingPath="mods.hpOverride"
+                tooltip={() => hpOverride}
+                onValueChange={([newHpOverride]) =>
+                  setSettings((draft) => {
+                    draft.mods.hpOverride = newHpOverride;
+                  })
+                }
+                min={0}
+                max={11}
+                step={0.5}
+              />
+            ) : null
+          }
+        />
+
+        <SwitchInput
+          label="Fade In"
+          selector={(state) => state.mods.cover?.type === "fadeIn"}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.cover = {
+                  type: "fadeIn",
+                  amount: 0.5,
+                };
+              } else {
+                draft.mods.cover = null;
+              }
+            })
+          }
+          extraInput={
+            cover?.type === "fadeIn" ? (
+              <SliderInput
+                containerClassName="w-full"
+                settingPath="mods.cover.amount"
+                tooltip={(amount) => `${Math.round(amount * 100)}%`}
+                onValueChange={([amount]) =>
+                  setSettings((draft) => {
+                    draft.mods.cover!.amount = amount;
+                  })
+                }
+                min={0.1}
+                max={0.9}
+                step={0.01}
+              />
+            ) : null
+          }
+        />
+
+        <SwitchInput
+          label="Fade Out"
+          selector={(state) => state.mods.cover?.type === "fadeOut"}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.cover = {
+                  type: "fadeOut",
+                  amount: 0.5,
+                };
+              } else {
+                draft.mods.cover = null;
+              }
+            })
+          }
+          extraInput={
+            cover?.type === "fadeOut" ? (
+              <SliderInput
+                containerClassName="w-full"
+                settingPath="mods.cover.amount"
+                tooltip={(amount) => `${Math.round(amount * 100)}%`}
+                onValueChange={([amount]) =>
+                  setSettings((draft) => {
+                    draft.mods.cover!.amount = amount;
+                  })
+                }
+                min={0.1}
+                max={0.9}
+                step={0.01}
+              />
+            ) : null
+          }
+        />
+
+        <SwitchInput
+          label="Percy"
+          selector={(state) => !!state.mods.percy}
+          hideReset
+          onCheckedChange={(checked) =>
+            setSettings((draft) => {
+              if (checked) {
+                draft.mods.percy = {
+                  cutoffDuration: 20,
+                  fadeDuration: 0,
+                };
+              } else {
+                draft.mods.percy = null;
+              }
+            })
+          }
+          extraInput={
+            percy ? (
+              <SliderInput
+                containerClassName="w-full"
+                settingPath="mods.percy.cutoffDuration"
+                tooltip={(cutoffDuration) => `${cutoffDuration}ms`}
+                onValueChange={([cutoffDuration]) =>
+                  setSettings((draft) => {
+                    draft.mods.percy!.cutoffDuration = cutoffDuration;
+                  })
+                }
+                min={0}
+                max={150}
+                step={1}
+              />
+            ) : null
+          }
+        />
+
+        <p className="text-muted-foreground text-sm">
+          The Percy mod reduces the visual length of hold notes, which may make
+          beatmaps with dense hold notes easier to read.
+        </p>
+      </div>
+
+      <Button
+        variant={"destructive"}
+        className="mt-8 w-full"
+        onClick={() => {
+          resetMods();
+          toast("Mods have been reset.");
+        }}
+      >
+        Reset Mods
+      </Button>
+    </>
+  );
+};
+
+export default ModsTab;

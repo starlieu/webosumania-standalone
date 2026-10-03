@@ -1,0 +1,38 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# production
+/dist
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+
+# typescript
+*.tsbuildinfo
+
+.wrangler
+
+.devContainer
+
+# Generated desktop and native build output
+/release/
+/android/.gradle/
+/android/app/build/
+/android/capacitor-cordova-android-plugins/
+/android/app/src/main/assets/public/
+/native/**/bin/
+/native/**/obj/
+/.tanstack/

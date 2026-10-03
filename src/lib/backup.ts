@@ -1,0 +1,282 @@
+import type { ExportOptionId } from "@/components/settings/backupAndRestore/backupAndRestoreSettings";
+import type { IdbFile, StoreName } from "@/lib/idb";
+import { idb } from "@/lib/idb";
+import { useCollectionsStore } from "@/stores/collectionsStore";
+import { useHighScoresStore } from "@/stores/highScoresStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useStoredBeatmapSetsStore } from "@/stores/storedBeatmapSetsStore";
+import {
+  BlobReader,
+  BlobWriter,
+  TextReader,
+  ZipReader,
+  ZipWriter,
+} from "@zip.js/zip.js";
+import { createElement } from "react";
+import { toast } from "sonner";
+
+export async function downloadBackup(
+  filename: string,
+  selectedData: ExportOptionId[],
+) {
+  const { default: streamSaver } = await import("streamsaver");
+
+  const fileStream = streamSaver.createWriteStream(filename);
+  const zipWriter = new ZipWriter(fileStream);
+
+  // Localstorage
+
+  if (selectedData.includes("settingsAndKeybinds")) {
+    const mods = useSettingsStore.getState().mods;
+    useSettingsStore.getState().resetMods();
+    addLocalStorageFileToZip(zipWriter, "settings");
+    useSettingsStore.setState({ mods });
+  }
+
+  // IndexedDB
+
+  if (selectedData.includes("settingsAndKeybinds")) {
+    const getCustomSoundFilename = (key: string, blob: Blob) => {
+      const file = blob as File;
+      console.log(file);
+
+      const format = file.name.split(".").pop();
+      return `${key}.${format}`;
+    };
+
+    await addIdbStoreToZip(zipWriter, "customSounds", getCustomSoundFilename);
+  }
+
+  if (selectedData.includes("highScoresAndReplays")) {
+    await addIdbUserDataToZip(zipWriter, "highScores");
+  }
+
+  if (selectedData.includes("collections")) {
+    const data = useCollectionsStore.getState().collections;
+
+    if (data) {
+      zipWriter.add(`collections.json`, new TextReader(JSON.stringify(data)));
+    }
+  }
+
+  if (selectedData.includes("storedBeatmapSets")) {
+    await addIdbUserDataToZip(zipWriter, "storedBeatmapSets");
+
+    const getFilename = (key: string) => {
+      const beatmapSet = useStoredBeatmapSetsStore
+        .getState()
+        .storedBeatmapSets.find((set) => set.id.toString() === key);
+
+      if (beatmapSet) {
+        const unsafeCharacters = /[<>:"/\\|?*[\]()]/g;
+        return `${key} ${beatmapSet.artist.replace(unsafeCharacters, "_")} - ${beatmapSet.title.replace(unsafeCharacters, "_")}.osz`;
+      } else {
+        return `${key}.osz`;
+      }
+    };
+
+    await addIdbStoreToZip(zipWriter, "beatmapFiles", getFilename, false);
+  }
+
+  if (selectedData.includes("highScoresAndReplays")) {
+    const getFilename = (key: string) => {
+      return `${key}.womr`;
+    };
+
+    await addIdbStoreToZip(zipWriter, "replayFiles", getFilename);
+  }
+
+  await zipWriter.close();
+}
+
+function addLocalStorageFileToZip(
+  zipWriter: ZipWriter<unknown>,
+  localStorageKey: string,
+) {
+  const data = localStorage.getItem(localStorageKey);
+
+  if (!data) {
+    return;
+  }
+
+  zipWriter.add(`${localStorageKey}.json`, new TextReader(data));
+}
+
+async function addIdbUserDataToZip(zipWriter: ZipWriter<unknown>, key: string) {
+  const db = await idb.db;
+  const data = await db.get("userData", key);
+
+  if (data) {
+    zipWriter.add(`${key}.json`, new TextReader(data));
+  }
+}
+
+async function addIdbStoreToZip(
+  zipWriter: ZipWriter<unknown>,
+  storeName: StoreName,
+  getFilename: (key: string, blob: Blob) => string,
+  deflate = true,
+) {
+  const keys = await idb.getStoreKeys(storeName);
+
+  for (const key of keys) {
+    const value = (await idb.getStoreValue(storeName, key)) as IdbFile;
+
+    if (!value) {
+      continue;
+    }
+
+    const blob = value.file;
+    const path = `${storeName}/${getFilename(key, value.file)}`;
+
+    await zipWriter.add(path, new BlobReader(blob), {
+      level: deflate ? 6 : 0,
+    });
+  }
+}
+
+export async function importBackup(zipBlob: File) {
+  const reader = new ZipReader(new BlobReader(zipBlob));
+  const entries = await reader.getEntries();
+
+  let hasSettings = false;
+  let hasHighScores = false;
+  let collectionCount: number | null = null;
+  let storedBeatmapCount: number | null = null;
+
+  for (const entry of entries) {
+    if (entry.directory) {
+      continue;
+    }
+
+    const blob = await entry.getData?.(new BlobWriter());
+    if (!blob) {
+      continue;
+    }
+
+    const filename = entry.filename;
+
+    // JSON
+    if (filename.endsWith(".json") && !filename.includes("/")) {
+      const key = filename.replace(".json", "");
+      const text = await blob.text();
+
+      if (key === "collections") {
+        const collections = JSON.parse(text);
+        collectionCount = Object.keys(collections).length;
+
+        useCollectionsStore.setState((draft) => {
+          draft.collections = {
+            ...draft.collections,
+            ...collections,
+          };
+        });
+      } else if (key === "savedBeatmapSets") {
+        const data = JSON.parse(text);
+        const savedBeatmapSets = data.state.savedBeatmapSets;
+        collectionCount = 1;
+
+        useCollectionsStore.setState((draft) => {
+          draft.collections["Saved"] = savedBeatmapSets;
+        });
+      }
+
+      if (filename === "settings.json") {
+        const mods = useSettingsStore.getState().mods;
+        localStorage.setItem(key, text);
+        useSettingsStore.persist.rehydrate();
+        hasSettings = true;
+        useSettingsStore.setState({ mods });
+      } else if (filename === "highScores.json") {
+        const db = await idb.db;
+        await db.put("userData", text, "highScores");
+
+        useHighScoresStore.persist.rehydrate();
+        hasHighScores = true;
+      } else if (filename === "storedBeatmapSets.json") {
+        const db = await idb.db;
+        await db.put("userData", text, "storedBeatmapSets");
+
+        useStoredBeatmapSetsStore.persist.rehydrate();
+        storedBeatmapCount =
+          useStoredBeatmapSetsStore.getState().storedBeatmapSets.length;
+      }
+
+      continue;
+    }
+
+    // Custom sounds
+    const customSoundMatch = filename.match(/^customSounds\/(.+)$/);
+    if (customSoundMatch) {
+      const key = customSoundMatch[1];
+      const [fileName] = key.split(".");
+      const audioFile = new File([blob], entry.filename, {
+        type: blob.type,
+      });
+      await idb.saveCustomSound(fileName, audioFile);
+      continue;
+    }
+
+    // Beatmap files
+    const beatmapMatch = filename.match(/^beatmapFiles\/(\d+)(?: .+)?\.osz$/);
+    if (beatmapMatch) {
+      const key = beatmapMatch[1];
+      await idb.saveToStore("beatmapFiles", blob, key, Date.now());
+      storedBeatmapCount ??= 0;
+      storedBeatmapCount++;
+
+      continue;
+    }
+
+    // Replay files
+    const replayMatch = filename.match(/^replayFiles\/(\d+)(?: .+)?\.womr$/);
+    if (replayMatch) {
+      const key = replayMatch[1];
+      await idb.saveToStore("replayFiles", blob, key, Date.now());
+      continue;
+    }
+  }
+
+  if (
+    hasSettings ||
+    hasHighScores ||
+    collectionCount !== null ||
+    storedBeatmapCount !== null
+  ) {
+    toast("Backup imported successfully", {
+      description: createElement("ul", { className: "list-inside list-disc" }, [
+        ...(hasSettings
+          ? [createElement("li", { key: "1" }, "Settings & Keybinds")]
+          : []),
+        ...(hasHighScores
+          ? [createElement("li", { key: "2" }, "Highscores & Replays")]
+          : []),
+        ...(collectionCount !== null
+          ? [
+              createElement(
+                "li",
+                { key: "3" },
+                `${collectionCount} Collection${collectionCount > 1 ? "s" : ""}`,
+              ),
+            ]
+          : []),
+        ...(storedBeatmapCount !== null
+          ? [
+              createElement(
+                "li",
+                { key: "4" },
+                `${storedBeatmapCount} Stored Beatmap${storedBeatmapCount > 1 ? "s" : ""}`,
+              ),
+            ]
+          : []),
+      ]),
+      duration: 8000,
+    });
+  } else {
+    toast("Backup did not contain any data", {
+      description: "Please check that the ZIP contains valid backup data.",
+    });
+  }
+
+  await reader.close();
+}
